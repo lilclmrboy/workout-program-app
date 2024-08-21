@@ -90,6 +90,14 @@ users = spreadsheet.worksheet_by_title('users')
 user_data = users.get_all_records()
 df_users = pd.DataFrame(user_data)
 
+workouts = spreadsheet.worksheet_by_title('workouts')
+workouts_data = workouts.get_all_records()
+df_workouts = pd.DataFrame(workouts_data)
+
+workout_details = spreadsheet.worksheet_by_title('workout-details')
+workout_details_data = workout_details.get_all_records()
+df_workout_details = pd.DataFrame(workouts_data)
+
 with st.expander('Excercises'):
     st.dataframe(df_excercises)
 
@@ -120,6 +128,11 @@ with st.form('Configuration'):
                                     min_value=4,
                                     max_value=16,
                                     value=12)
+
+    df_user_workouts = df_users.merge(df_workouts, on=['Workout-ID'], how='left')
+    st.dataframe(df_user_workouts)
+    # df_user_workouts = df_user_workouts[df_user_workouts['username_hash'] == st.session_state.username_hash]
+
 
     flag_submitted = st.form_submit_button("Generate")
 
