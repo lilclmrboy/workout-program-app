@@ -1,3 +1,5 @@
 streamlit
 pygsheets
 streamlit-authenticator
+garminconnect
+plotly
