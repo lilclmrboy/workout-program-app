@@ -9,6 +9,8 @@ import hashlib
 import math
 import plotly.express as px
 from datetime import datetime
+from scipy import signal
+import numpy as np
 
 
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -21,16 +23,29 @@ if 'username_hash' not in st.session_state:
 
 
 def periodization_equation(step, nTotalSteps, base=0.6, nCycles=3.0):
-    percent = 0.0
-    rate = 0.3
-    x = step
+    # percent = 0.0
+    # rate = 0.3
+    # x = step
+    #
+    # maxSteps = float(nTotalSteps) - 1.0
+    #
+    # b = ((float(maxSteps) + 1) / nCycles)
+    # period = (math.fmod(step, b) * b / (b - 1.0)) / b
+    # percent = ((rate / nTotalSteps) * x + base) + 0.1 * period
 
-    maxSteps = float(nTotalSteps) - 1.0
+    time_steps_ss = np.linspace(start=1, stop=1, num=nTotalSteps, endpoint=False)
+    time_steps = np.linspace(start=0, stop=1, num=nTotalSteps, endpoint=False)
+    vals = signal.sawtooth(2 * np.pi * nCycles * time_steps, width=1.0) + time_steps
 
-    b = ((float(maxSteps) + 1) / nCycles)
-    period = (math.fmod(step, b) * b / (b - 1.0)) / b
-    percent = ((rate / nTotalSteps) * x + base) + 0.1 * period
+    vals_min = np.min(vals)
+    vals = vals - vals_min
+    vals_max = np.max(vals)
+    vals = vals/vals_max
 
+    growth_delta = 1.0 - base
+    vals = vals * growth_delta
+    base_vals = time_steps_ss * base
+    percent = base_vals[step] + vals[step]
     return percent
 
 def hash_username(username):
@@ -131,6 +146,16 @@ def extract_workout_day_id(row):
     index_val = row.name
     return index_val % days_per_week
 
+def generate_periodization(row, workout_id, num_workouts):
+    cycles = row.get('Cycles')
+    workout_step = row.get('ID')
+
+    periodization_val = periodization_equation(step=workout_step,
+                                               nTotalSteps=num_workouts,
+                                               base=0.6,
+                                               nCycles=cycles)
+    return periodization_val
+
 def generate_workout(row, df_workout_details):
     _df = pd.DataFrame(row).T
     return _df.merge(df_workout_details, on=['Workout-ID', 'Workout-Day-ID'])
@@ -152,6 +177,7 @@ def generate_workout_details(row, df_excercises, df_user_logs):
     weeks = row.get('Weeks')
     days_per_week = row.get('Days Per Week')
     num_workouts = weeks * days_per_week
+    workout_percentage = row.get('Workout Percentage')
 
     _df_excercise = df_excercises[df_excercises['Exercise'] == exercise]
     if flag_random == True:
@@ -173,18 +199,11 @@ def generate_workout_details(row, df_excercises, df_user_logs):
     exercise_defintions = []
     for set in range(sets):
 
-        if progression == 'Periodization':
-            periodization_val = periodization_equation(step=workout_day_id,
-                                                        nTotalSteps=num_workouts,
-                                                        base=0.6,
-                                                        nCycles=cycles)
-            weight_val = target_weight * ratio_val * periodization_val
-            repititions_val = repititions
-        elif progression == 'Flat':
-            weight_val = target_weight * ratio_val
+        if progression == 'Flat':
+            weight_val = target_weight * workout_percentage * ratio_val
             repititions_val = repititions
         else:
-            weight_val = target_weight * ratio_val
+            weight_val = target_weight * workout_percentage * ratio_val
             repititions_val = repititions
 
         if exercise_type != 'Core':
@@ -198,7 +217,7 @@ def generate_workout_details(row, df_excercises, df_user_logs):
             'Workout-Day-ID': workout_day_id,
             'Workout Date': workout_date,
             'Workout Start Date': start_date,
-            'Excercise-Set-ID': set,
+            'Exercise-Set-ID': set,
             'Exercise-Type': exercise_type,
             'Exercise': excercise_val,
             'CNJ Raio': ratio_val,
@@ -264,22 +283,53 @@ def app():
             df_user_workout['Days Per Week'] = days_per_week
             df_user_workout['Cycles'] = num_cycles
             df_user_workout['Workout-Day-ID'] = df_user_workout.apply(lambda row: extract_workout_day_id(row), axis=1)
+            df_user_workout = df_user_workout.reset_index().rename(columns={'index':'ID'})
+            df_user_workout['Workout Percentage'] = df_user_workout.apply(lambda row: generate_periodization(row, row.index, len(df_user_workout)), axis=1)
+
+            # fig_workout_periodization = px.scatter(df_user_workout, x='Workout Date', y='Workout Percentage').update_traces(mode='lines+markers')
+            # st.plotly_chart(fig_workout_periodization, use_container_width=True)
 
             df_workout_expanded = pd.concat(df_user_workout.apply(lambda row: generate_workout(row, df_workout_details), axis=1).tolist(), ignore_index=True)
 
             df_workout_expanded_complete = pd.concat(df_workout_expanded.apply(lambda row: generate_workout_details(row, df_excercises, df_user_specific_logs), axis=1).tolist(), ignore_index=True)
+            df_workout_expanded_complete['Weight (lbs)'] = df_workout_expanded_complete['Weight'] * 2.204
 
             st.subheader("Recommended Workout for Today")
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             df_workout_expanded_complete_filtered = df_workout_expanded_complete[df_workout_expanded_complete['Workout Date'] == today]
-            st.dataframe(df_workout_expanded_complete_filtered[['Exercise', 'Weight', 'Units']])
+            if df_workout_expanded_complete_filtered.empty:
+                st.write("Rest Day. ")
+            else:
+                st.dataframe(df_workout_expanded_complete_filtered[['Exercise', 'Weight', 'Weight (lbs)', 'Units']])
 
-            fig_exercise_timeline = px.scatter(df_workout_expanded_complete, x='Workout Date', y='Weight', color='Exercise').update_traces(mode='markers')
+            fig_exercise_timeline = px.scatter(df_workout_expanded_complete, x='Workout Date', y='Weight (lbs)', color='Exercise').update_traces(mode='lines+markers')
             st.plotly_chart(fig_exercise_timeline, use_container_width=True)
 
             with st.expander("Show all Workout Data"):
                 st.dataframe(df_workout_expanded_complete)
 
+            with st.expander("Show all Workouts", expanded=True):
+
+                df_workout_expanded_complete = df_workout_expanded_complete.merge(df_workouts[['Workout-ID', 'Description', 'Workout Weeks']], on=['Workout-ID'])
+
+                workout_dates = df_workout_expanded_complete['Workout Date'].unique()
+                for workout_date in workout_dates:
+
+                    date_str = workout_date.strftime("%A - %B %-d, %Y")
+                    st.header(f"{date_str}")
+
+                    _df = df_workout_expanded_complete[df_workout_expanded_complete['Workout Date'] == workout_date]
+                    workouts = _df['Workout-ID'].unique()
+                    for workout in workouts:
+                        __df = _df[_df['Workout-ID'] == workout]
+
+                        workout_str = df_workouts.iloc[0]['Description']
+                        st.subheader(f"{workout_str}")
+
+                        _df_exercises = __df.groupby(['Workout-Day-ID', 'Exercise', 'Repetitions', 'Weight', 'Weight (lbs)']).size().to_frame(name='Sets').reset_index()
+                        _df_exercises_summary = _df_exercises[['Exercise', 'Sets', 'Repetitions', 'Weight', 'Weight (lbs)']]
+
+                        st.markdown(_df_exercises_summary.style.hide(axis="index").to_html(), unsafe_allow_html=True)
 
 
 def gather_data():

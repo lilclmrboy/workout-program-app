@@ -17,3 +17,9 @@ A simple Streamlit app template for you to modify!
    ```
    $ streamlit run streamlit_app.py
    ```
+
+# Notes for Application
+
+Consider adding in support for Garmin Connect. 
+
+https://github.com/cyberjunky/python-garminconnect/blob/master/example.py
