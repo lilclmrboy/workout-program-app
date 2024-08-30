@@ -208,13 +208,7 @@ def generate_workout_details(row, df_excercises, df_user_logs):
         if exercise_type not in ['Core', 'Bodyweight']:
             weight_val = round(weight_val / 2.5) * 2.5
             weight_val = max(weight_val, 40.0)
-
-            # Taper the reps as the percentage gets higher
-            if workout_percentage >= 0.975:
-                repititions_val = int(repititions_val * 0.333)
-            elif workout_percentage >= 0.95:
-                repititions_val = int(repititions_val * 0.5)
-            repititions_val = max(1, repititions_val)
+            repititions_val = adjust_repetitions(workout_percentage, repititions_val)
 
         else:
             weight_val = repititions_val
@@ -241,6 +235,22 @@ def generate_workout_details(row, df_excercises, df_user_logs):
 
     return pd.DataFrame(exercise_defintions)
 
+
+def adjust_repetitions(workout_percentage, repetitions_val):
+    adjustments = [
+        (0.975, 0.25),
+        (0.95, 0.333),
+        (0.925, 0.5),
+        (0.9, 0.75)
+    ]
+
+    for threshold, factor in adjustments:
+        if workout_percentage >= threshold:
+            repetitions_val = int(repetitions_val * factor)
+            break
+
+    repetitions_val = max(1, repetitions_val)
+    return repetitions_val
 
 def app():
 
@@ -305,7 +315,7 @@ def app():
             df_workout_expanded = pd.concat(df_user_workout.apply(lambda row: generate_workout(row, df_workout_details), axis=1).tolist(), ignore_index=True)
 
             df_workout_expanded_complete = pd.concat(df_workout_expanded.apply(lambda row: generate_workout_details(row, df_excercises, df_user_specific_logs), axis=1).tolist(), ignore_index=True)
-            df_workout_expanded_complete['Weight (lbs)'] = df_workout_expanded_complete['Weight'] * 2.204
+            df_workout_expanded_complete['Weight (lbs)'] = df_workout_expanded_complete['Weight'].apply(lambda x: round_weight_lbs(x))
 
             st.subheader("Recommended Workout for Today")
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -348,6 +358,11 @@ def app():
                         df_styled = _df_exercises_summary.style.set_properties(subset=['Weight', 'Weight (lbs)', 'Reps', 'Sets'], **{'text-align': 'center'})
                         df_styled = df_styled.format(precision=1).hide(axis="index")
                         st.markdown(df_styled.to_html(), unsafe_allow_html=True)
+
+def round_weight_lbs(x):
+    multiplier = (x * 2.204) / 5.0
+    rounded_val = round(multiplier) * 5
+    return max(45, rounded_val)
 
 
 def gather_data():
