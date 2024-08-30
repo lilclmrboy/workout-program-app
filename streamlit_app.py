@@ -23,15 +23,6 @@ if 'username_hash' not in st.session_state:
 
 
 def periodization_equation(step, nTotalSteps, base=0.6, nCycles=3.0):
-    # percent = 0.0
-    # rate = 0.3
-    # x = step
-    #
-    # maxSteps = float(nTotalSteps) - 1.0
-    #
-    # b = ((float(maxSteps) + 1) / nCycles)
-    # period = (math.fmod(step, b) * b / (b - 1.0)) / b
-    # percent = ((rate / nTotalSteps) * x + base) + 0.1 * period
 
     time_steps_ss = np.linspace(start=1, stop=1, num=nTotalSteps, endpoint=False)
     time_steps = np.linspace(start=0, stop=1, num=nTotalSteps, endpoint=False)
@@ -202,18 +193,37 @@ def generate_workout_details(row, df_excercises, df_user_logs):
         if progression == 'Flat':
             weight_val = target_weight * workout_percentage * ratio_val
             repititions_val = repititions
+        elif progression == 'Linear':
+            _percent_step_size = 0.1
+            _percent_calc = 1.0 - (_percent_step_size * sets) + (_percent_step_size * set + _percent_step_size)
+            if exercise_type == 'Bodyweight':
+                repititions_val = _percent_calc * row.get('Repetitions')
+            else:
+                weight_val = target_weight * _percent_calc * ratio_val
+                repititions_val = row.get('Repetitions')
         else:
             weight_val = target_weight * workout_percentage * ratio_val
             repititions_val = repititions
 
-        if exercise_type != 'Core':
+        if exercise_type not in ['Core', 'Bodyweight']:
             weight_val = round(weight_val / 2.5) * 2.5
             weight_val = max(weight_val, 40.0)
+
+            # Taper the reps as the percentage gets higher
+            if workout_percentage >= 0.975:
+                repititions_val = int(repititions_val * 0.333)
+            elif workout_percentage >= 0.95:
+                repititions_val = int(repititions_val * 0.5)
+            repititions_val = max(1, repititions_val)
+
         else:
-            weight_val = 0.0
+            weight_val = repititions_val
+
+        weight_val = workout_percentage * weight_val
 
         _exercise = {
             'Workout-ID': workout_id,
+            'Workout Percentage': workout_percentage,
             'Workout-Day-ID': workout_day_id,
             'Workout Date': workout_date,
             'Workout Start Date': start_date,
@@ -249,10 +259,13 @@ def app():
     if st.session_state.username_hash in users:
         st.subheader('Available Workouts')
 
+        _username = st.session_state.username_hash
+
         df_user_workouts = df_users.merge(df_workouts, on=['Workout-ID'], how='left')
+        df_user_workouts = df_user_workouts[df_user_workouts['username_hash'] == _username]
         df_user_workouts['DescriptionTime'] = df_user_workouts.apply(lambda row: expand_description(row), axis=1)
         df_user_workouts['Start Date'] = pd.to_datetime(df_user_workouts['Start Date'])
-        df_user_specific_logs = df_user_logs[df_user_logs['username_hash'] == st.session_state.username_hash]
+        df_user_specific_logs = df_user_logs[df_user_logs['username_hash'] == _username]
 
         # Select the workout from the user
         workout_choice = st.selectbox('Workout Selection', options=df_user_workouts['DescriptionTime'].unique())
@@ -302,7 +315,7 @@ def app():
             else:
                 st.dataframe(df_workout_expanded_complete_filtered[['Exercise', 'Weight', 'Weight (lbs)', 'Units']])
 
-            fig_exercise_timeline = px.scatter(df_workout_expanded_complete, x='Workout Date', y='Weight (lbs)', color='Exercise').update_traces(mode='lines+markers')
+            fig_exercise_timeline = px.scatter(df_workout_expanded_complete, x='Workout Date', y='Weight', color='Exercise').update_traces(mode='lines+markers')
             st.plotly_chart(fig_exercise_timeline, use_container_width=True)
 
             with st.expander("Show all Workout Data"):
@@ -324,12 +337,17 @@ def app():
                         __df = _df[_df['Workout-ID'] == workout]
 
                         workout_str = df_workouts.iloc[0]['Description']
-                        st.subheader(f"{workout_str}")
+
+                        percent_effort = __df.iloc[0]['Workout Percentage'] * 100.0
+                        st.subheader(f"{workout_str} at {percent_effort:.0f} percent")
 
                         _df_exercises = __df.groupby(['Workout-Day-ID', 'Exercise', 'Repetitions', 'Weight', 'Weight (lbs)']).size().to_frame(name='Sets').reset_index()
                         _df_exercises_summary = _df_exercises[['Exercise', 'Sets', 'Repetitions', 'Weight', 'Weight (lbs)']]
 
-                        st.markdown(_df_exercises_summary.style.hide(axis="index").to_html(), unsafe_allow_html=True)
+                        _df_exercises_summary.rename(columns={'Repetitions': "Reps"}, inplace=True)
+                        df_styled = _df_exercises_summary.style.set_properties(subset=['Weight', 'Weight (lbs)', 'Reps', 'Sets'], **{'text-align': 'center'})
+                        df_styled = df_styled.format(precision=1).hide(axis="index")
+                        st.markdown(df_styled.to_html(), unsafe_allow_html=True)
 
 
 def gather_data():
@@ -378,7 +396,7 @@ def gather_data():
 
     with st.expander('Excercises'):
         st.dataframe(df_excercises)
-    with st.expander('Users', expanded=True):
+    with st.expander('Users', expanded=False):
         st.dataframe(df_users)
     with st.expander('User Logs'):
         st.dataframe(df_user_logs)
