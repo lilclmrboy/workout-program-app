@@ -280,10 +280,23 @@ def adjust_repetitions(workout_percentage, repetitions_val):
     repetitions_val = max(1, repetitions_val)
     return repetitions_val
 
-def data_editor_changed():
+
+def data_editor_changed(df):
     try:
+        _df = df
+        edited_rows = ss.ed["edited_rows"]
         logging.debug("edited_rows: ", ss.ed["edited_rows"])
+        st.write(edited_rows)
+
+        rows_to_keep = []
+        for key in edited_rows.keys():
+            rows_to_keep.append(key)
+
+        __df = _df.loc[rows_to_keep]
+        st.dataframe(__df)
+
     except AttributeError as e:
+        e = e
         logging.debug(f"Error showing changes to dataframe: {e}")
 
 def app():
@@ -295,6 +308,8 @@ def app():
 
     if st.sidebar.button("Refresh Data"):
         st.session_state.df_users, st.session_state.df_excercises, st.session_state.df_workouts, st.session_state.df_workout_details, st.session_state.df_user_logs = gather_data()
+
+        ss.edited_df = pd.DataFrame()
 
     flag_create_new_workout = st.checkbox("Create New Workout")
     if flag_create_new_workout:
@@ -363,11 +378,28 @@ def app():
                 st.subheader("Recommended Workout for Today")
                 today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
                 df_workout_expanded_complete_filtered = df_workout_expanded_complete[df_workout_expanded_complete['Workout Date'] == today]
-                if df_workout_expanded_complete_filtered.empty:
+                df_workout_expanded_complete_filtered.reset_index(inplace=True, drop=True)
+
+                _workout_today_fields = ['Workout-ID', 'Workout Date', 'Exercise-Set-ID', 'Exercise', 'Repetitions', 'Weight', 'Weight (lbs)', 'Time', 'Units']
+
+                _edited_df = ss.edited_df
+                if _edited_df.empty:
+                    df_workout_today = df_workout_expanded_complete_filtered.copy()
+                    df_workout_today = df_workout_today[_workout_today_fields]
+                else:
+                    df_workout_today = _edited_df
+
+                if df_workout_today.empty:
                     st.write("Rest Day. ")
                 else:
-                    ss.edited_df = st.data_editor(_df_exercises_summary, on_change=data_editor_changed, key="ed")
-                    # st.dataframe(df_workout_expanded_complete_filtered[['Exercise', 'Weight', 'Weight (lbs)', 'Units']])
+                    df_workout_today['User'] = _username
+                    ss.edited_df = st.data_editor(df_workout_today,
+                                                  # column_config={
+                                                  # },
+                                                  hide_index=True,
+                                                  on_change=data_editor_changed,
+                                                  args=[df_workout_today],
+                                                  key="ed")
 
                 fig_exercise_timeline = px.scatter(df_workout_expanded_complete, x='Workout Date', y='Weight', color='Exercise').update_traces(mode='lines+markers')
                 st.plotly_chart(fig_exercise_timeline, use_container_width=True)
