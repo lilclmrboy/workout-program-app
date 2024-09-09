@@ -1,6 +1,8 @@
 import pandas as pd
+import random
 import streamlit as st
 import streamlit_authenticator as stauth
+from streamlit import session_state as ss
 import logging
 import pygsheets
 import ast
@@ -20,6 +22,27 @@ log.setLevel(logging.DEBUG)
 
 if 'username_hash' not in st.session_state:
     st.session_state.username_hash = None
+
+if 'df_users' not in st.session_state:
+    st.session_state.df_users = pd.DataFrame()
+
+if 'df_excercises' not in st.session_state:
+    st.session_state.df_excercises = pd.DataFrame()
+
+if 'df_workouts' not in st.session_state:
+    st.session_state.df_workouts = pd.DataFrame()
+
+if 'df_workout_details' not in st.session_state:
+    st.session_state.df_workout_details = pd.DataFrame()
+
+if 'df_user_logs' not in st.session_state:
+    st.session_state.df_user_logs = pd.DataFrame()
+
+if 'edited_df' not in st.session_state:
+    st.session_state.edited_df = pd.DataFrame()
+
+if 'ed' not in st.session_state:
+    st.session_state.ed = {}
 
 
 def periodization_equation(step, nTotalSteps, base=0.6, nCycles=3.0):
@@ -132,10 +155,16 @@ def expand_description(row):
     timeframe = row.get('Workout Weeks')
     return f"{description} - {timeframe} Weeks"
 
+
 def extract_workout_day_id(row):
     days_per_week = row.get('Days Per Week')
     index_val = row.name
-    return index_val % days_per_week
+    try:
+        workout_day_id = index_val % days_per_week
+    except ValueError as e:
+        workout_day_id = None
+    return workout_day_id
+
 
 def generate_periodization(row, workout_id, num_workouts):
     cycles = row.get('Cycles')
@@ -164,11 +193,10 @@ def generate_workout_details(row, df_excercises, df_user_logs):
     start_date = row.get('Start Date')
     workout_id = row.get('Workout-ID')
     workout_day_id = row.name
-    cycles = row.get('Cycles')
     weeks = row.get('Weeks')
     days_per_week = row.get('Days Per Week')
-    num_workouts = weeks * days_per_week
     workout_percentage = row.get('Workout Percentage')
+    time_val = row.get('Time')
 
     _df_excercise = df_excercises[df_excercises['Exercise'] == exercise]
     if flag_random == True:
@@ -188,31 +216,30 @@ def generate_workout_details(row, df_excercises, df_user_logs):
     target_weight = df_sorted.iloc[0]['value']
 
     exercise_defintions = []
-    for set in range(sets):
+    for s in range(sets):
 
-        if progression == 'Flat':
-            weight_val = target_weight * workout_percentage * ratio_val
-            repititions_val = repititions
-        elif progression == 'Linear':
-            _percent_step_size = 0.1
-            _percent_calc = 1.0 - (_percent_step_size * sets) + (_percent_step_size * set + _percent_step_size)
-            if exercise_type == 'Bodyweight':
-                repititions_val = _percent_calc * row.get('Repetitions')
+        percent_step_size = 0.1
+        percent_calc = 1.0 - (percent_step_size * sets) + (percent_step_size * (s + 1))
+
+        if progression == 'Linear':
+
+            if exercise_type in ['Core', 'Bodyweight']:
+                repetitions_val = int(percent_calc * row.get('Repetitions', repititions))
+                weight_val = 0.0
             else:
-                weight_val = target_weight * _percent_calc * ratio_val
-                repititions_val = row.get('Repetitions')
-        else:
+                weight_val = target_weight * percent_calc * ratio_val
+                repetitions_val = row.get('Repetitions', repititions)
+
+        else:  # Applies for both 'Flat' and other cases
             weight_val = target_weight * workout_percentage * ratio_val
-            repititions_val = repititions
+            repetitions_val = repititions
 
+        # Adjust weight and repetitions based on exercise type
         if exercise_type not in ['Core', 'Bodyweight']:
-            weight_val = round(weight_val / 2.5) * 2.5
-            weight_val = max(weight_val, 40.0)
-            repititions_val = adjust_repetitions(workout_percentage, repititions_val)
-
+            weight_val = max(round(weight_val / 2.5) * 2.5, 40.0)
+            repetitions_val = adjust_repetitions(workout_percentage, repetitions_val)
         else:
-            weight_val = repititions_val
-
+            weight_val = 0
         weight_val = workout_percentage * weight_val
 
         _exercise = {
@@ -221,12 +248,13 @@ def generate_workout_details(row, df_excercises, df_user_logs):
             'Workout-Day-ID': workout_day_id,
             'Workout Date': workout_date,
             'Workout Start Date': start_date,
-            'Exercise-Set-ID': set,
+            'Exercise-Set-ID': s,
             'Exercise-Type': exercise_type,
             'Exercise': excercise_val,
             'CNJ Raio': ratio_val,
-            'Repetitions':repititions_val,
+            'Repetitions':repetitions_val,
             'Weight': weight_val,
+            'Time': time_val,
             'Units': units_val,
             'Random Flag': flag_random,
         }
@@ -252,6 +280,12 @@ def adjust_repetitions(workout_percentage, repetitions_val):
     repetitions_val = max(1, repetitions_val)
     return repetitions_val
 
+def data_editor_changed():
+    try:
+        logging.debug("edited_rows: ", ss.ed["edited_rows"])
+    except AttributeError as e:
+        logging.debug(f"Error showing changes to dataframe: {e}")
+
 def app():
 
     if not check_password():
@@ -259,105 +293,117 @@ def app():
 
     st.title("🎈 Workout Planner")
 
-    df_users, df_excercises, df_workouts, df_workout_details, df_user_logs = gather_data()
+    if st.sidebar.button("Refresh Data"):
+        st.session_state.df_users, st.session_state.df_excercises, st.session_state.df_workouts, st.session_state.df_workout_details, st.session_state.df_user_logs = gather_data()
 
     flag_create_new_workout = st.checkbox("Create New Workout")
     if flag_create_new_workout:
         create_new_workout()
 
-    users = df_users['username_hash'].unique()
-    if st.session_state.username_hash in users:
-        st.subheader('Available Workouts')
+    if not st.session_state.df_users.empty:
 
-        _username = st.session_state.username_hash
+        df_users = st.session_state.df_users
+        df_excercises = st.session_state.df_excercises
+        df_workouts = st.session_state.df_workouts
+        df_workout_details = st.session_state.df_workout_details
+        df_user_logs = st.session_state.df_user_logs
 
-        df_user_workouts = df_users.merge(df_workouts, on=['Workout-ID'], how='left')
-        df_user_workouts = df_user_workouts[df_user_workouts['username_hash'] == _username]
-        df_user_workouts['DescriptionTime'] = df_user_workouts.apply(lambda row: expand_description(row), axis=1)
-        df_user_workouts['Start Date'] = pd.to_datetime(df_user_workouts['Start Date'])
-        df_user_specific_logs = df_user_logs[df_user_logs['username_hash'] == _username]
+        users = df_users['username_hash'].unique()
+        if st.session_state.username_hash in users:
+            st.subheader('Available Workouts')
 
-        # Select the workout from the user
-        workout_choice = st.selectbox('Workout Selection', options=df_user_workouts['DescriptionTime'].unique())
+            _username = st.session_state.username_hash
 
-        df = df_user_workouts[df_user_workouts['DescriptionTime'] == workout_choice]
-        workout_ids = df['Workout-ID'].unique()
-        for workout_id in workout_ids:
-            st.subheader(f'Workout: ')
-            start_date = df.loc[df['Workout-ID'] == workout_id, 'Start Date'].iloc[0]
-            days_of_week = df.loc[df['Workout-ID'] == workout_id, 'Days of Week'].iloc[0]
-            days_of_week = ast.literal_eval(days_of_week)
-            num_weeks = df.loc[df['Workout-ID'] == workout_id, 'Workout Weeks'].iloc[0]
-            days_per_week = df.loc[df['Workout-ID'] == workout_id, 'DaysPerWeek'].iloc[0]
-            num_cycles = df.loc[df['Workout-ID'] == workout_id, 'Cycles'].iloc[0]
+            df_user_workouts = df_users.merge(df_workouts, on=['Workout-ID'], how='left')
+            df_user_workouts = df_user_workouts[df_user_workouts['username_hash'] == _username]
+            df_user_workouts['DescriptionTime'] = df_user_workouts.apply(lambda row: expand_description(row), axis=1)
+            df_user_workouts['Start Date'] = pd.to_datetime(df_user_workouts['Start Date'])
+            df_user_specific_logs = df_user_logs[df_user_logs['username_hash'] == _username]
 
-            # Generate the range of dates
-            dates = pd.date_range(start=start_date, periods=num_weeks * 3, freq='B').to_series()
+            # Select the workout from the user
+            workout_choice = st.selectbox('Workout Selection', options=df_user_workouts['DescriptionTime'].unique())
 
-            # Filter to only include Mondays, Wednesdays, and Fridays
-            dates = dates[dates.dt.dayofweek.isin(days_of_week)]
+            df = df_user_workouts[df_user_workouts['DescriptionTime'] == workout_choice]
+            workout_ids = df['Workout-ID'].unique()
+            for workout_id in workout_ids:
+                st.subheader(f'Workout: ')
+                start_date = df.loc[df['Workout-ID'] == workout_id, 'Start Date'].iloc[0]
+                days_of_week = df.loc[df['Workout-ID'] == workout_id, 'Days of Week'].iloc[0]
+                days_of_week = ast.literal_eval(days_of_week)
+                num_weeks = df.loc[df['Workout-ID'] == workout_id, 'Workout Weeks'].iloc[0]
+                days_per_week = df.loc[df['Workout-ID'] == workout_id, 'DaysPerWeek'].iloc[0]
+                num_cycles = df.loc[df['Workout-ID'] == workout_id, 'Cycles'].iloc[0]
 
-            df_user_workout = pd.DataFrame(dates)
-            df_user_workout.reset_index(names='Workout Date', inplace=True)
-            df_user_workout.drop(columns=0, inplace=True)
-            df_user_workout['Workout-ID'] = workout_id
-            df_user_workout['Start Date'] = start_date
-            df_user_workout['Weeks'] = num_weeks
-            df_user_workout['Days Per Week'] = days_per_week
-            df_user_workout['Cycles'] = num_cycles
-            df_user_workout['Workout-Day-ID'] = df_user_workout.apply(lambda row: extract_workout_day_id(row), axis=1)
-            df_user_workout = df_user_workout.reset_index().rename(columns={'index':'ID'})
-            df_user_workout['Workout Percentage'] = df_user_workout.apply(lambda row: generate_periodization(row, row.index, len(df_user_workout)), axis=1)
+                # Generate the range of dates
+                dates = pd.date_range(start=start_date, periods=num_weeks * 7, freq='D').to_series()
 
-            # fig_workout_periodization = px.scatter(df_user_workout, x='Workout Date', y='Workout Percentage').update_traces(mode='lines+markers')
-            # st.plotly_chart(fig_workout_periodization, use_container_width=True)
+                # Filter to only include Mondays, Wednesdays, and Fridays
+                dates = dates[dates.dt.dayofweek.isin(days_of_week)]
 
-            df_workout_expanded = pd.concat(df_user_workout.apply(lambda row: generate_workout(row, df_workout_details), axis=1).tolist(), ignore_index=True)
+                df_user_workout = pd.DataFrame(dates)
+                df_user_workout.reset_index(names='Workout Date', inplace=True)
+                df_user_workout.drop(columns=0, inplace=True)
+                df_user_workout['Workout-ID'] = workout_id
+                df_user_workout['Start Date'] = start_date
+                df_user_workout['Weeks'] = num_weeks
+                df_user_workout['Days Per Week'] = days_per_week
+                df_user_workout['Cycles'] = num_cycles
+                try:
+                    df_user_workout['Workout-Day-ID'] = df_user_workout.apply(lambda row: extract_workout_day_id(row), axis=1)
+                except ValueError as e:
+                    logging.debug(f"Error setting workout day id: {e}")
+                df_user_workout = df_user_workout.reset_index().rename(columns={'index': 'ID'})
+                df_user_workout['Workout Percentage'] = df_user_workout.apply(lambda row: generate_periodization(row, row.index, len(df_user_workout)), axis=1)
 
-            df_workout_expanded_complete = pd.concat(df_workout_expanded.apply(lambda row: generate_workout_details(row, df_excercises, df_user_specific_logs), axis=1).tolist(), ignore_index=True)
-            df_workout_expanded_complete['Weight (lbs)'] = df_workout_expanded_complete['Weight'].apply(lambda x: round_weight_lbs(x))
+                df_workout_expanded = pd.concat(df_user_workout.apply(lambda row: generate_workout(row, df_workout_details), axis=1).tolist(), ignore_index=True)
 
-            st.subheader("Recommended Workout for Today")
-            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            df_workout_expanded_complete_filtered = df_workout_expanded_complete[df_workout_expanded_complete['Workout Date'] == today]
-            if df_workout_expanded_complete_filtered.empty:
-                st.write("Rest Day. ")
-            else:
-                st.dataframe(df_workout_expanded_complete_filtered[['Exercise', 'Weight', 'Weight (lbs)', 'Units']])
+                df_workout_expanded_complete = pd.concat(df_workout_expanded.apply(lambda row: generate_workout_details(row, df_excercises, df_user_specific_logs), axis=1).tolist(), ignore_index=True)
+                df_workout_expanded_complete['Weight (lbs)'] = df_workout_expanded_complete['Weight'].apply(lambda x: round_weight_lbs(x))
 
-            fig_exercise_timeline = px.scatter(df_workout_expanded_complete, x='Workout Date', y='Weight', color='Exercise').update_traces(mode='lines+markers')
-            st.plotly_chart(fig_exercise_timeline, use_container_width=True)
+                st.subheader("Recommended Workout for Today")
+                today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                df_workout_expanded_complete_filtered = df_workout_expanded_complete[df_workout_expanded_complete['Workout Date'] == today]
+                if df_workout_expanded_complete_filtered.empty:
+                    st.write("Rest Day. ")
+                else:
+                    ss.edited_df = st.data_editor(_df_exercises_summary, on_change=data_editor_changed, key="ed")
+                    # st.dataframe(df_workout_expanded_complete_filtered[['Exercise', 'Weight', 'Weight (lbs)', 'Units']])
 
-            with st.expander("Show all Workout Data"):
-                st.dataframe(df_workout_expanded_complete)
+                fig_exercise_timeline = px.scatter(df_workout_expanded_complete, x='Workout Date', y='Weight', color='Exercise').update_traces(mode='lines+markers')
+                st.plotly_chart(fig_exercise_timeline, use_container_width=True)
 
-            with st.expander("Show all Workouts", expanded=True):
+                with st.expander("Show all Workout Data"):
+                    st.dataframe(df_workout_expanded_complete)
 
-                df_workout_expanded_complete = df_workout_expanded_complete.merge(df_workouts[['Workout-ID', 'Description', 'Workout Weeks']], on=['Workout-ID'])
+                with st.expander("Show all Workouts", expanded=True):
 
-                workout_dates = df_workout_expanded_complete['Workout Date'].unique()
-                for workout_date in workout_dates:
+                    df_workout_expanded_complete = df_workout_expanded_complete.merge(df_workouts[['Workout-ID', 'Description', 'Workout Weeks']], on=['Workout-ID'])
 
-                    date_str = workout_date.strftime("%A - %B %-d, %Y")
-                    st.header(f"{date_str}")
+                    workout_dates = df_workout_expanded_complete['Workout Date'].unique()
+                    for workout_date in workout_dates:
 
-                    _df = df_workout_expanded_complete[df_workout_expanded_complete['Workout Date'] == workout_date]
-                    workouts = _df['Workout-ID'].unique()
-                    for workout in workouts:
-                        __df = _df[_df['Workout-ID'] == workout]
+                        date_str = workout_date.strftime("%A - %B %-d, %Y")
+                        st.header(f"{date_str}")
 
-                        workout_str = df_workouts.iloc[0]['Description']
+                        _df = df_workout_expanded_complete[df_workout_expanded_complete['Workout Date'] == workout_date]
+                        workouts = _df['Workout-ID'].unique()
+                        for workout in workouts:
+                            __df = _df[_df['Workout-ID'] == workout]
 
-                        percent_effort = __df.iloc[0]['Workout Percentage'] * 100.0
-                        st.subheader(f"{workout_str} at {percent_effort:.0f} percent")
+                            workout_str = df_workouts.iloc[0]['Description']
 
-                        _df_exercises = __df.groupby(['Workout-Day-ID', 'Exercise', 'Repetitions', 'Weight', 'Weight (lbs)']).size().to_frame(name='Sets').reset_index()
-                        _df_exercises_summary = _df_exercises[['Exercise', 'Sets', 'Repetitions', 'Weight', 'Weight (lbs)']]
+                            percent_effort = __df.iloc[0]['Workout Percentage'] * 100.0
+                            st.subheader(f"{workout_str} at {percent_effort:.0f} percent")
 
-                        _df_exercises_summary.rename(columns={'Repetitions': "Reps"}, inplace=True)
-                        df_styled = _df_exercises_summary.style.set_properties(subset=['Weight', 'Weight (lbs)', 'Reps', 'Sets'], **{'text-align': 'center'})
-                        df_styled = df_styled.format(precision=1).hide(axis="index")
-                        st.markdown(df_styled.to_html(), unsafe_allow_html=True)
+                            _df_exercises = __df.groupby(['Workout-Day-ID', 'Exercise', 'Repetitions', 'Weight', 'Weight (lbs)', 'Time']).size().to_frame(name='Sets').reset_index()
+                            _df_exercises_summary = _df_exercises[['Workout-Day-ID', 'Exercise', 'Sets', 'Repetitions', 'Weight', 'Weight (lbs)', 'Time']]
+
+                            _df_exercises_summary.rename(columns={'Repetitions': "Reps"}, inplace=True)
+                            df_styled = _df_exercises_summary.style.set_properties(subset=['Weight', 'Weight (lbs)', 'Reps', 'Sets', 'Time'], **{'text-align': 'center'})
+                            df_styled = df_styled.format(precision=1).hide(axis="index")
+                            st.markdown(df_styled.to_html(), unsafe_allow_html=True)
+
+
 
 def round_weight_lbs(x):
     multiplier = (x * 2.204) / 5.0
@@ -369,7 +415,6 @@ def gather_data():
     gsheet_id = st.secrets["GSHEET_WORKOUT_ID"]
     gservice_data = st.secrets["GSERVICE_JSON_DATA"]
 
-    # gservice_authorization = ast.literal_eval(gservice_data)
     gsclient = pygsheets.authorize(service_account_json=gservice_data)
     spreadsheet = gsclient.open_by_key(gsheet_id)
 
