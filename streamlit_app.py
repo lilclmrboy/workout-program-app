@@ -205,15 +205,21 @@ def generate_workout_details(row, df_excercises, df_user_logs):
     excercise_val = _df_excercise.iloc[0]['Exercise']
     units_val = _df_excercise.iloc[0]['Units']
 
-    df_filtered = df_user_logs[df_user_logs['exercise'] == excercise_val]
-    ratio_val = 1.0
-    if df_filtered.empty:
-        ratio_val = _df_excercise.iloc[0]['CNJ Ratio']
-        df_filtered = df_user_logs[df_user_logs['exercise'] == 'BodyWeight']
+    try:
 
-    df_filtered['date'] = pd.to_datetime(df_filtered['date'], format='%m/%d/%Y')
-    df_sorted = df_filtered.sort_values(by='date', ascending=False)
-    target_weight = df_sorted.iloc[0]['value']
+        df_filtered = df_user_logs[df_user_logs['Exercise'] == excercise_val]
+
+        if df_filtered.empty:
+            df_filtered = df_user_logs[df_user_logs['Exercise'] == 'BodyWeight']
+            df_filtered['date'] = pd.to_datetime(df_filtered['date'], format='%m/%d/%Y')
+            df_sorted = df_filtered.sort_values(by='date', ascending=False)
+            target_weight = df_sorted.iloc[0]['Weight']
+            ratio_val = 1.0
+
+    except KeyError as e:
+        logging.debug(f"Error getting bodyweight: {e}")
+        target_weight = 100.0
+        ratio_val = _df_excercise.iloc[0]['CNJ Ratio']
 
     exercise_defintions = []
     for s in range(sets):
@@ -286,18 +292,62 @@ def data_editor_changed(df):
         _df = df  # Make a copy of the DataFrame
         edited_rows = st.session_state.ed["edited_rows"]  # Ensure correct access to session state
         logging.debug("edited_rows: ", edited_rows)  # Debugging log
-        st.write("Edited Rows: ", edited_rows)  # Display for debugging
+
+        rows_to_keep = []
+        for key in edited_rows.keys():
+            rows_to_keep.append(key)
 
         # Apply the edits to the DataFrame
         for row_index, row_data in edited_rows.items():
             for col_name, new_value in row_data.items():
                 _df.at[int(row_index), col_name] = new_value  # Update the DataFrame with new values
+                _df.at[int(row_index), 'Workout Date'] = pd.Timestamp.now()
 
         ss.edited_df = _df
+
+        __df = _df.loc[rows_to_keep]
+        log_updates = __df.values.tolist()
+        update_users_logs(log_updates, list(__df.columns))
 
     except AttributeError as e:
         logging.debug(f"Error showing changes to dataframe: {e}")
         st.write(f"Error: {e}")
+
+
+def update_users_logs(log_updates, headers):
+    gsheet_id = st.secrets["GSHEET_WORKOUT_ID"]
+    gservice_data = st.secrets["GSERVICE_JSON_DATA"]
+
+    gsclient = pygsheets.authorize(service_account_json=gservice_data)
+    spreadsheet = gsclient.open_by_key(gsheet_id)
+
+    # Read from each sheet in the spreadsheet
+    worksheet = spreadsheet.worksheet_by_title('users-logs')
+
+    # Get the last row with data
+    def get_last_row(sheet):
+        # Use A:A to get all values in column A
+        values = sheet.get_col(1, include_tailing_empty=False)
+        return len(values)
+
+    last_row = get_last_row(worksheet)
+
+    # Calculate the starting cell for appending
+    start_cell = f'A{last_row + 1}'
+
+    converted_data_iso = []
+
+    if start_cell == 'A1':
+        converted_data_iso = [headers]
+
+    for log_update in log_updates:
+        _converted_data_iso = [
+            item.isoformat() if isinstance(item, pd.Timestamp) else item
+            for item in log_update
+        ]
+        converted_data_iso.append(_converted_data_iso)
+
+    worksheet.update_values(start_cell, converted_data_iso)
 
 
 def app():
@@ -311,9 +361,9 @@ def app():
 
         ss.edited_df = pd.DataFrame()
 
-    flag_create_new_workout = st.sidebar.checkbox("Create New Workout")
-    if flag_create_new_workout:
-        create_new_workout()
+    # flag_create_new_workout = st.sidebar.checkbox("Create New Workout")
+    # if flag_create_new_workout:
+    #     create_new_workout()
 
     if not st.session_state.df_users.empty:
 
@@ -333,7 +383,10 @@ def app():
             df_user_workouts = df_user_workouts[df_user_workouts['username_hash'] == _username]
             df_user_workouts['DescriptionTime'] = df_user_workouts.apply(lambda row: expand_description(row), axis=1)
             df_user_workouts['Start Date'] = pd.to_datetime(df_user_workouts['Start Date'])
-            df_user_specific_logs = df_user_logs[df_user_logs['username_hash'] == _username]
+            try:
+                df_user_specific_logs = df_user_logs[df_user_logs['username_hash'] == _username]
+            except KeyError as e:
+                df_user_specific_logs = pd.DataFrame()
 
             # Select the workout from the user
             workout_choice = st.selectbox('Workout Selection', options=df_user_workouts['DescriptionTime'].unique())
@@ -341,7 +394,6 @@ def app():
             df = df_user_workouts[df_user_workouts['DescriptionTime'] == workout_choice]
             workout_ids = df['Workout-ID'].unique()
             for workout_id in workout_ids:
-                st.subheader(f'Workout: ')
                 start_date = df.loc[df['Workout-ID'] == workout_id, 'Start Date'].iloc[0]
                 days_of_week = df.loc[df['Workout-ID'] == workout_id, 'Days of Week'].iloc[0]
                 days_of_week = ast.literal_eval(days_of_week)
@@ -388,12 +440,12 @@ def app():
                     df_workout_expanded_complete['Workout Date'] == today]
                 df_workout_expanded_complete_filtered.reset_index(inplace=True, drop=True)
 
-                _workout_today_fields = ['Workout-ID', 'Workout Date', 'Exercise-Set-ID', 'Exercise', 'Repetitions',
-                                         'Weight', 'Weight (lbs)', 'Time', 'Units']
-
                 _edited_df = ss.edited_df
                 if _edited_df.empty:
                     df_workout_today = df_workout_expanded_complete_filtered.copy()
+                    _workout_today_fields = ['Workout-ID', 'Workout Date', 'Exercise-Set-ID', 'Exercise', 'Repetitions',
+                                             'Weight', 'Weight (lbs)', 'Time', 'Units']
+
                     df_workout_today = df_workout_today[_workout_today_fields]
                     df_workout_today['TODO'] = False
                     df_workout_today['Missed'] = False
@@ -416,6 +468,7 @@ def app():
                                                        ),
                                                        'Weight': st.column_config.NumberColumn(
                                                            help='Weight of exercise in SI units',
+                                                           label='Weight (kg)',
                                                            format="%.0f",
                                                        ),
                                                        'Weight (lbs)': st.column_config.NumberColumn(
@@ -521,16 +574,16 @@ def gather_data():
     user_logs_data = user_logs.get_all_records()
     df_user_logs = pd.DataFrame(user_logs_data)
 
-    with st.expander('Excercises'):
-        st.dataframe(df_excercises)
-    with st.expander('Users', expanded=False):
-        st.dataframe(df_users)
-    with st.expander('User Logs'):
-        st.dataframe(df_user_logs)
-    with st.expander('Workouts'):
-        st.dataframe(df_workouts)
-    with st.expander('Workout Details'):
-        st.dataframe(df_workout_details)
+    # with st.expander('Excercises'):
+    #     st.dataframe(df_excercises)
+    # with st.expander('Users', expanded=False):
+    #     st.dataframe(df_users)
+    # with st.expander('User Logs'):
+    #     st.dataframe(df_user_logs)
+    # with st.expander('Workouts'):
+    #     st.dataframe(df_workouts)
+    # with st.expander('Workout Details'):
+    #     st.dataframe(df_workout_details)
 
     return df_users, df_excercises, df_workouts, df_workout_details, df_user_logs
 
