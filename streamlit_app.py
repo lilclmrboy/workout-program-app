@@ -14,7 +14,6 @@ from datetime import datetime
 from scipy import signal
 import numpy as np
 
-
 FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 log = logging.getLogger(__name__)
 logging.basicConfig(format=FORMAT)
@@ -46,7 +45,6 @@ if 'ed' not in st.session_state:
 
 
 def periodization_equation(step, nTotalSteps, base=0.6, nCycles=3.0):
-
     time_steps_ss = np.linspace(start=1, stop=1, num=nTotalSteps, endpoint=False)
     time_steps = np.linspace(start=0, stop=1, num=nTotalSteps, endpoint=False)
     vals = signal.sawtooth(2 * np.pi * nCycles * time_steps, width=1.0) + time_steps
@@ -54,13 +52,14 @@ def periodization_equation(step, nTotalSteps, base=0.6, nCycles=3.0):
     vals_min = np.min(vals)
     vals = vals - vals_min
     vals_max = np.max(vals)
-    vals = vals/vals_max
+    vals = vals / vals_max
 
     growth_delta = 1.0 - base
     vals = vals * growth_delta
     base_vals = time_steps_ss * base
     percent = base_vals[step] + vals[step]
     return percent
+
 
 def hash_username(username):
     # Ensure the username is encoded to bytes, required for hashing
@@ -176,6 +175,7 @@ def generate_periodization(row, workout_id, num_workouts):
                                                nCycles=cycles)
     return periodization_val
 
+
 def generate_workout(row, df_workout_details):
     _df = pd.DataFrame(row).T
     return _df.merge(df_workout_details, on=['Workout-ID', 'Workout-Day-ID'])
@@ -252,7 +252,7 @@ def generate_workout_details(row, df_excercises, df_user_logs):
             'Exercise-Type': exercise_type,
             'Exercise': excercise_val,
             'CNJ Raio': ratio_val,
-            'Repetitions':repetitions_val,
+            'Repetitions': repetitions_val,
             'Weight': weight_val,
             'Time': time_val,
             'Units': units_val,
@@ -283,24 +283,24 @@ def adjust_repetitions(workout_percentage, repetitions_val):
 
 def data_editor_changed(df):
     try:
-        _df = df
-        edited_rows = ss.ed["edited_rows"]
-        logging.debug("edited_rows: ", ss.ed["edited_rows"])
-        st.write(edited_rows)
+        _df = df  # Make a copy of the DataFrame
+        edited_rows = st.session_state.ed["edited_rows"]  # Ensure correct access to session state
+        logging.debug("edited_rows: ", edited_rows)  # Debugging log
+        st.write("Edited Rows: ", edited_rows)  # Display for debugging
 
-        rows_to_keep = []
-        for key in edited_rows.keys():
-            rows_to_keep.append(key)
+        # Apply the edits to the DataFrame
+        for row_index, row_data in edited_rows.items():
+            for col_name, new_value in row_data.items():
+                _df.at[int(row_index), col_name] = new_value  # Update the DataFrame with new values
 
-        __df = _df.loc[rows_to_keep]
-        st.dataframe(__df)
+        ss.edited_df = _df
 
     except AttributeError as e:
-        e = e
         logging.debug(f"Error showing changes to dataframe: {e}")
+        st.write(f"Error: {e}")
+
 
 def app():
-
     if not check_password():
         st.stop()
 
@@ -311,7 +311,7 @@ def app():
 
         ss.edited_df = pd.DataFrame()
 
-    flag_create_new_workout = st.checkbox("Create New Workout")
+    flag_create_new_workout = st.sidebar.checkbox("Create New Workout")
     if flag_create_new_workout:
         create_new_workout()
 
@@ -364,28 +364,39 @@ def app():
                 df_user_workout['Days Per Week'] = days_per_week
                 df_user_workout['Cycles'] = num_cycles
                 try:
-                    df_user_workout['Workout-Day-ID'] = df_user_workout.apply(lambda row: extract_workout_day_id(row), axis=1)
+                    df_user_workout['Workout-Day-ID'] = df_user_workout.apply(lambda row: extract_workout_day_id(row),
+                                                                              axis=1)
                 except ValueError as e:
                     logging.debug(f"Error setting workout day id: {e}")
                 df_user_workout = df_user_workout.reset_index().rename(columns={'index': 'ID'})
-                df_user_workout['Workout Percentage'] = df_user_workout.apply(lambda row: generate_periodization(row, row.index, len(df_user_workout)), axis=1)
+                df_user_workout['Workout Percentage'] = df_user_workout.apply(
+                    lambda row: generate_periodization(row, row.index, len(df_user_workout)), axis=1)
 
-                df_workout_expanded = pd.concat(df_user_workout.apply(lambda row: generate_workout(row, df_workout_details), axis=1).tolist(), ignore_index=True)
+                df_workout_expanded = pd.concat(
+                    df_user_workout.apply(lambda row: generate_workout(row, df_workout_details), axis=1).tolist(),
+                    ignore_index=True)
 
-                df_workout_expanded_complete = pd.concat(df_workout_expanded.apply(lambda row: generate_workout_details(row, df_excercises, df_user_specific_logs), axis=1).tolist(), ignore_index=True)
-                df_workout_expanded_complete['Weight (lbs)'] = df_workout_expanded_complete['Weight'].apply(lambda x: round_weight_lbs(x))
+                df_workout_expanded_complete = pd.concat(df_workout_expanded.apply(
+                    lambda row: generate_workout_details(row, df_excercises, df_user_specific_logs), axis=1).tolist(),
+                                                         ignore_index=True)
+                df_workout_expanded_complete['Weight (lbs)'] = df_workout_expanded_complete['Weight'].apply(
+                    lambda x: round_weight_lbs(x))
 
                 st.subheader("Recommended Workout for Today")
                 today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                df_workout_expanded_complete_filtered = df_workout_expanded_complete[df_workout_expanded_complete['Workout Date'] == today]
+                df_workout_expanded_complete_filtered = df_workout_expanded_complete[
+                    df_workout_expanded_complete['Workout Date'] == today]
                 df_workout_expanded_complete_filtered.reset_index(inplace=True, drop=True)
 
-                _workout_today_fields = ['Workout-ID', 'Workout Date', 'Exercise-Set-ID', 'Exercise', 'Repetitions', 'Weight', 'Weight (lbs)', 'Time', 'Units']
+                _workout_today_fields = ['Workout-ID', 'Workout Date', 'Exercise-Set-ID', 'Exercise', 'Repetitions',
+                                         'Weight', 'Weight (lbs)', 'Time', 'Units']
 
                 _edited_df = ss.edited_df
                 if _edited_df.empty:
                     df_workout_today = df_workout_expanded_complete_filtered.copy()
                     df_workout_today = df_workout_today[_workout_today_fields]
+                    df_workout_today['TODO'] = False
+                    df_workout_today['Missed'] = False
                 else:
                     df_workout_today = _edited_df
 
@@ -393,15 +404,35 @@ def app():
                     st.write("Rest Day. ")
                 else:
                     df_workout_today['User'] = _username
-                    ss.edited_df = st.data_editor(df_workout_today,
-                                                  # column_config={
-                                                  # },
-                                                  hide_index=True,
-                                                  on_change=data_editor_changed,
-                                                  args=[df_workout_today],
-                                                  key="ed")
 
-                fig_exercise_timeline = px.scatter(df_workout_expanded_complete, x='Workout Date', y='Weight', color='Exercise').update_traces(mode='lines+markers')
+                    _workout_fields = ['Exercise', 'Repetitions', 'Weight (lbs)', 'Weight', 'Time', 'TODO']
+                    _df_workout_today = df_workout_today[_workout_fields]
+
+                    _ss_edited_df = st.data_editor(_df_workout_today,
+                                                   column_config={
+                                                       'TODO': st.column_config.CheckboxColumn(
+                                                           label="TODO",
+                                                           help="Check if the exercise is completed",
+                                                       ),
+                                                       'Weight': st.column_config.NumberColumn(
+                                                           help='Weight of exercise in SI units',
+                                                           format="%.0f",
+                                                       ),
+                                                       'Weight (lbs)': st.column_config.NumberColumn(
+                                                           help='Weight of exercise in Imperial units',
+                                                           format="%.0f",
+                                                       ),
+                                                   },
+                                                   hide_index=True,
+                                                   on_change=data_editor_changed,
+                                                   args=[df_workout_today],
+                                                   disabled=['Exercise', 'Repetitions', 'Weight (lbs)', 'Weight', 'Time'],
+                                                   use_container_width=True,
+                                                   key="ed",
+                                                   )
+
+                fig_exercise_timeline = px.scatter(df_workout_expanded_complete_filtered, x='Exercise', y='Weight',
+                                                   color='Exercise').update_traces(mode='lines+markers')
                 st.plotly_chart(fig_exercise_timeline, use_container_width=True)
 
                 with st.expander("Show all Workout Data"):
@@ -409,7 +440,8 @@ def app():
 
                 with st.expander("Show all Workouts", expanded=True):
 
-                    df_workout_expanded_complete = df_workout_expanded_complete.merge(df_workouts[['Workout-ID', 'Description', 'Workout Weeks']], on=['Workout-ID'])
+                    df_workout_expanded_complete = df_workout_expanded_complete.merge(
+                        df_workouts[['Workout-ID', 'Description', 'Workout Weeks']], on=['Workout-ID'])
 
                     workout_dates = df_workout_expanded_complete['Workout Date'].unique()
                     for workout_date in workout_dates:
@@ -427,14 +459,17 @@ def app():
                             percent_effort = __df.iloc[0]['Workout Percentage'] * 100.0
                             st.subheader(f"{workout_str} at {percent_effort:.0f} percent")
 
-                            _df_exercises = __df.groupby(['Workout-Day-ID', 'Exercise', 'Repetitions', 'Weight', 'Weight (lbs)', 'Time']).size().to_frame(name='Sets').reset_index()
-                            _df_exercises_summary = _df_exercises[['Workout-Day-ID', 'Exercise', 'Sets', 'Repetitions', 'Weight', 'Weight (lbs)', 'Time']]
+                            _df_exercises = __df.groupby(
+                                ['Workout-Day-ID', 'Exercise', 'Repetitions', 'Weight', 'Weight (lbs)',
+                                 'Time']).size().to_frame(name='Sets').reset_index()
+                            _df_exercises_summary = _df_exercises[
+                                ['Workout-Day-ID', 'Exercise', 'Sets', 'Repetitions', 'Weight', 'Weight (lbs)', 'Time']]
 
                             _df_exercises_summary.rename(columns={'Repetitions': "Reps"}, inplace=True)
-                            df_styled = _df_exercises_summary.style.set_properties(subset=['Weight', 'Weight (lbs)', 'Reps', 'Sets', 'Time'], **{'text-align': 'center'})
+                            df_styled = _df_exercises_summary.style.set_properties(
+                                subset=['Weight', 'Weight (lbs)', 'Reps', 'Sets', 'Time'], **{'text-align': 'center'})
                             df_styled = df_styled.format(precision=1).hide(axis="index")
                             st.markdown(df_styled.to_html(), unsafe_allow_html=True)
-
 
 
 def round_weight_lbs(x):
