@@ -8,6 +8,7 @@ import pygsheets
 import ast
 import hmac
 import hashlib
+import time
 import math
 import plotly.express as px
 from datetime import datetime
@@ -507,11 +508,22 @@ def create_workout_for_today(_username, df_workout_expanded_complete):
         ss.df_today['Missed'] = False
         ss.df_today['User'] = _username
 
-    _workout_fields = ['Exercise', 'Repetitions', 'Weight (lbs)', 'Weight', 'Time', 'Completed', 'Missed']
+    _workout_fields = ['Exercise', 'Repetitions', 'Weight (lbs)', 'Weight', 'Completed', 'Missed']
     _df_workout_today_todo = ss.df_today[(ss.df_today['Completed'] == False)]
 
     st.subheader('Next Exercise')
+
     df_next_exercise = _df_workout_today_todo.head(1)
+
+    # Replace empty strings with NaN
+    df_next_exercise['Time'] = df_next_exercise['Time'].replace('', np.nan)
+
+    # Convert to numeric (this will turn non-convertible values into NaN)
+    df_next_exercise['Time'] = pd.to_numeric(df_next_exercise['Time'], errors='coerce')
+
+    # Replace NaN values with 0.0
+    df_next_exercise['Time'] = df_next_exercise['Time'].fillna(0.0)
+
     st.data_editor(df_next_exercise,
                    column_config={
                        'TODO': st.column_config.CheckboxColumn(
@@ -536,6 +548,16 @@ def create_workout_for_today(_username, df_workout_expanded_complete):
                    use_container_width=True,
                    key="ed",
                    )
+
+    set_time = df_next_exercise['Time'].iloc[0]
+    if set_time > 0.0 and st.button(f"Begin Timer for {set_time} seconds"):
+        timer_bar = st.progress(0, text=f"{set_time} seconds remaining")
+        for percent_complete in range(100):
+            time_delta = set_time / 100.0
+            time.sleep(time_delta)
+            time_remaining = set_time - time_delta * percent_complete
+            progress_text = f"{int(time_remaining)} seconds remaining"
+            timer_bar.progress(percent_complete + 1, text=progress_text)
 
     st.subheader('Upcoming Exercises')
     if _df_workout_today_todo.empty:
