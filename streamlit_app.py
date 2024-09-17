@@ -563,7 +563,11 @@ def create_workout_for_today(_username, df_workout_expanded_complete):
                    key="ed",
                    )
 
-    set_time = df_next_exercise['Time'].iloc[0]
+    try:
+        set_time = df_next_exercise['Time'].iloc[0]
+    except IndexError:
+        set_time = 0.0
+        
     if set_time > 0.0 and st.button(f"Begin Timer for {set_time} seconds"):
         timer_bar = st.progress(0, text=f"{set_time} seconds remaining")
         for percent_complete in range(100):
