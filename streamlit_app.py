@@ -213,17 +213,25 @@ def generate_workout_details(row, df_excercises, df_user_logs):
     try:
 
         df_filtered = df_user_logs[df_user_logs['Exercise'] == excercise_val]
+        df_filtered['date'] = pd.to_datetime(df_filtered['Workout Date'])
+        df_sorted = df_filtered.sort_values(by='date', ascending=False)
 
-        if df_filtered.empty:
+        if df_sorted.empty:
             df_filtered = df_user_logs[df_user_logs['Exercise'] == 'BodyWeight']
-            df_filtered['date'] = pd.to_datetime(df_filtered['date'], format='%m/%d/%Y')
+            df_filtered['date'] = pd.to_datetime(df_filtered['Workout Date'])
             df_sorted = df_filtered.sort_values(by='date', ascending=False)
             target_weight = df_sorted.iloc[0]['Weight']
             ratio_val = 1.0
+        else:
+            target_weight = df_sorted.iloc[0]['Weight']
+            ratio_val = _df_excercise.iloc[0]['CNJ Ratio']
 
     except KeyError as e:
-        logging.debug(f"Error getting bodyweight: {e}")
-        target_weight = 100.0
+        logging.debug(f"Error getting exercise: {e}")
+        df_filtered = df_user_logs[df_user_logs['Exercise'] == 'BodyWeight']
+        df_filtered['date'] = pd.to_datetime(df_filtered['Workout Date'])
+        df_sorted = df_filtered.sort_values(by='date', ascending=False)
+        target_weight = df_sorted.iloc[0]['Weight']
         ratio_val = _df_excercise.iloc[0]['CNJ Ratio']
 
     exercise_defintions = []
@@ -235,10 +243,11 @@ def generate_workout_details(row, df_excercises, df_user_logs):
         if progression == 'Linear':
 
             if exercise_type in ['Core', 'Bodyweight']:
-                repetitions_val = int(percent_calc * row.get('Repetitions', repititions)) * improvement_percentage
+                repetitions_val = int(percent_calc * row.get('Repetitions', repititions))
                 weight_val = 0.0
             else:
-                weight_val = target_weight * percent_calc * ratio_val * improvement_percentage
+                weight_val = target_weight * percent_calc * ratio_val
+                weight_val *= improvement_percentage
                 repetitions_val = row.get('Repetitions', repititions)
 
         else:  # Applies for both 'Flat' and other cases
@@ -418,6 +427,8 @@ def app():
                     df_workout_expanded_complete = df_workout_expanded_complete.merge(
                         df_workouts[['Workout-ID', 'Description', 'Workout Weeks']], on=['Workout-ID'])
 
+
+
                     workout_dates = df_workout_expanded_complete['Workout Date'].unique()
                     for workout_date in workout_dates:
                         display_workout_cycle_unique_date(df_workout_expanded_complete, df_workouts, workout_date)
@@ -496,17 +507,20 @@ def create_user_workout_meta_information(df, workout_id):
 
 
 def create_workout_for_today(_username, df_workout_expanded_complete):
+    ss_df_today = ss.df_today
 
     if ss.df_today.empty:
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        ss.df_today = df_workout_expanded_complete[df_workout_expanded_complete['Workout Date'] == today]
+        ss_df_today = df_workout_expanded_complete[df_workout_expanded_complete['Workout Date'] == today]
 
-        ss.df_today['Weight (lbs)'] = ss.df_today['Weight'].apply(lambda x: round_weight(x, units='lbs'))
-        ss.df_today['Weight'] = ss.df_today['Weight'].apply(lambda x: round_weight(x, units='kg'))
+        ss_df_today['Weight (lbs)'] = ss_df_today['Weight'].apply(lambda x: round_weight(x, units='lbs'))
+        ss_df_today['Weight'] = ss_df_today['Weight'].apply(lambda x: round_weight(x, units='kg'))
 
-        ss.df_today['Completed'] = False
-        ss.df_today['Missed'] = False
-        ss.df_today['User'] = _username
+        ss_df_today['Completed'] = False
+        ss_df_today['Missed'] = False
+        ss_df_today['User'] = _username
+
+        ss.df_today = ss_df_today
 
     _workout_fields = ['Exercise', 'Repetitions', 'Weight (lbs)', 'Weight', 'Completed', 'Missed']
     _df_workout_today_todo = ss.df_today[(ss.df_today['Completed'] == False)]
