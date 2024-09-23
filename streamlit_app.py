@@ -192,13 +192,11 @@ def generate_workout_details(row, df_excercises, df_user_logs):
     flag_random = row.get('Random')
     sets = row.get('Sets')
     repititions = row.get('Repetitions')
-    time_val = row.get('Time')
+    flag_compound = row.get('Compound')
     workout_date = row.get('Workout Date')
     start_date = row.get('Start Date')
     workout_id = row.get('Workout-ID')
     workout_day_id = row.name
-    weeks = row.get('Weeks')
-    days_per_week = row.get('Days Per Week')
     workout_percentage = row.get('Workout Percentage')
     time_val = row.get('Time')
     improvement_percentage = row.get('Improvement Percentage')
@@ -210,29 +208,8 @@ def generate_workout_details(row, df_excercises, df_user_logs):
     excercise_val = _df_excercise.iloc[0]['Exercise']
     units_val = _df_excercise.iloc[0]['Units']
 
-    try:
-
-        df_filtered = df_user_logs[df_user_logs['Exercise'] == excercise_val]
-        df_filtered['date'] = pd.to_datetime(df_filtered['Workout Date'])
-        df_sorted = df_filtered.sort_values(by='date', ascending=False)
-
-        if df_sorted.empty:
-            df_filtered = df_user_logs[df_user_logs['Exercise'] == 'BodyWeight']
-            df_filtered['date'] = pd.to_datetime(df_filtered['Workout Date'])
-            df_sorted = df_filtered.sort_values(by='date', ascending=False)
-            target_weight = df_sorted.iloc[0]['Weight']
-            ratio_val = 1.0
-        else:
-            target_weight = df_sorted.iloc[0]['Weight']
-            ratio_val = _df_excercise.iloc[0]['CNJ Ratio']
-
-    except KeyError as e:
-        logging.debug(f"Error getting exercise: {e}")
-        df_filtered = df_user_logs[df_user_logs['Exercise'] == 'BodyWeight']
-        df_filtered['date'] = pd.to_datetime(df_filtered['Workout Date'])
-        df_sorted = df_filtered.sort_values(by='date', ascending=False)
-        target_weight = df_sorted.iloc[0]['Weight']
-        ratio_val = _df_excercise.iloc[0]['CNJ Ratio']
+    ratio_val = df_excercises.loc[df_excercises['Exercise'] == excercise_val, 'CNJ Ratio'].values[0]
+    target_weight = get_latest_bodyweight(df_user_logs) * ratio_val
 
     exercise_defintions = []
     for s in range(sets):
@@ -284,6 +261,15 @@ def generate_workout_details(row, df_excercises, df_user_logs):
     return pd.DataFrame(exercise_defintions)
 
 
+def get_latest_bodyweight(df_user_logs):
+    df_filtered = df_user_logs[df_user_logs['Exercise'] == 'BodyWeight']
+    df_filtered['date'] = pd.to_datetime(df_filtered['Workout Date'])
+    df_sorted = df_filtered.sort_values(by='date', ascending=False)
+    target_weight = df_sorted.iloc[0]['Weight']
+    target_weight_val = float(target_weight)
+    return target_weight_val
+
+
 def adjust_repetitions(workout_percentage, repetitions_val):
     adjustments = [
         (0.975, 0.25),
@@ -321,9 +307,15 @@ def data_editor_changed(df):
 
         ss.df_today = _df
 
+        flag_skip = False
+        if 'Skip' in row_data:
+            flag_skip = row_data['Skip']
+
         __df = _df.loc[rows_to_keep]
         log_updates = __df.values.tolist()
-        update_users_logs(log_updates, list(__df.columns))
+
+        if not flag_skip:
+            update_users_logs(log_updates, list(__df.columns))
 
     except AttributeError as e:
         logging.debug(f"Error showing changes to dataframe: {e}")
@@ -518,11 +510,12 @@ def create_workout_for_today(_username, df_workout_expanded_complete):
 
         ss_df_today['Completed'] = False
         ss_df_today['Missed'] = False
+        ss_df_today['Skip'] = False
         ss_df_today['User'] = _username
 
         ss.df_today = ss_df_today
 
-    _workout_fields = ['Exercise', 'Repetitions', 'Weight (lbs)', 'Weight', 'Completed', 'Missed']
+    _workout_fields = ['Exercise', 'Repetitions', 'Weight (lbs)', 'Weight', 'Completed', 'Missed', 'Skip']
     _df_workout_today_todo = ss.df_today[(ss.df_today['Completed'] == False)]
 
     st.subheader('Next Exercise')
@@ -543,6 +536,10 @@ def create_workout_for_today(_username, df_workout_expanded_complete):
                        'TODO': st.column_config.CheckboxColumn(
                            label="Completed",
                            help="Check if the exercise is completed",
+                       ),
+                       'Skip': st.column_config.CheckboxColumn(
+                           label="Skip",
+                           help="Skip the exercise",
                        ),
                        'Weight': st.column_config.NumberColumn(
                            help='Weight of exercise in SI units',
@@ -567,7 +564,7 @@ def create_workout_for_today(_username, df_workout_expanded_complete):
         set_time = df_next_exercise['Time'].iloc[0]
     except IndexError:
         set_time = 0.0
-        
+
     if set_time > 0.0 and st.button(f"Begin Timer for {set_time} seconds"):
         timer_bar = st.progress(0, text=f"{set_time} seconds remaining")
         for percent_complete in range(100):
